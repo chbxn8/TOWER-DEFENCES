@@ -632,6 +632,7 @@
           <div id="upgrade-box" style="margin-top:auto; background:#090b10; border:3px solid #38bdf8; padding:10px; display:none; flex-direction:column; gap:6px; min-width:190px; border-radius:6px;">
             <div id="upg-title" style="font-weight:900; color:#38bdf8; font-size:14px;">타워</div>
             <div id="upg-info" style="font-size:11.5px; color:#cbd5e1; line-height:1.45;">Lv.0</div>
+            <button id="target-btn" class="btn btn-purple" style="font-size:13px; padding:6px;" onclick="cycleTargetMode()">🎯 타겟: 첫번째</button>
             <button id="upg-btn" class="btn btn-success" style="font-size:13px; padding:10px;" onclick="upgradeSelectedTower()">업그레이드</button>
             <button id="sell-btn" class="btn btn-danger" style="font-size:13px; padding:10px;" onclick="sellSelectedTower()">타워 삭제 (50% 반환)</button>
           </div>
@@ -791,7 +792,69 @@
       osc.start(t); osc.stop(t + 0.45);
     },
 
-    playCash() {
+    
+    bgmOsc1: null, bgmOsc2: null, bgmGain: null, currentTrack: null, nextNoteTime: 0, currentNote: 0,
+    seq: [], seqSpeed: 0.15,
+    playBGM(track) {
+      if (!this.enabled || !this.ctx) return;
+      if (this.currentTrack === track && this.bgmGain) return; // already playing
+      this.stopBGM();
+      this.currentTrack = track;
+      this.currentNote = 0;
+      this.nextNoteTime = this.ctx.currentTime + 0.1;
+      
+      this.bgmGain = this.ctx.createGain();
+      this.bgmGain.gain.value = 0.05; // low volume
+      this.bgmGain.connect(this.ctx.destination);
+      
+      if (track === 'easy') { this.seq = [261.63, 329.63, 392.00, 329.63]; this.seqSpeed = 0.4; } // C4 E4 G4 E4
+      else if (track === 'normal') { this.seq = [220.00, 261.63, 329.63, 261.63, 293.66, 329.63]; this.seqSpeed = 0.3; } // A3 C4 E4 C4 D4 E4
+      else if (track === 'hard') { this.seq = [196.00, 233.08, 293.66, 261.63]; this.seqSpeed = 0.25; } // G3 Bb3 D4 C4
+      else if (track === 'insane') { this.seq = [146.83, 164.81, 174.61, 164.81, 146.83, 130.81]; this.seqSpeed = 0.2; } // D3 E3 F3 E3 D3 C3
+      else if (track === 'tutorial') { this.seq = [261.63, 261.63, 392.00, 392.00]; this.seqSpeed = 0.5; }
+      else if (track === 'boss') { this.seq = [130.81, 138.59, 130.81, 146.83]; this.seqSpeed = 0.15; } // C3 C#3 C3 D3 - fast, tense
+      else if (track === 'insane_boss') { this.seq = [98.00, 103.83, 92.50, 82.41]; this.seqSpeed = 0.12; } // G2 G#2 F#2 E2 - very low, very tense
+      else return; // unhandled track
+      
+      this.scheduler();
+    },
+    stopBGM() {
+      this.currentTrack = null;
+      if (this.bgmGain) {
+          this.bgmGain.gain.setValueAtTime(this.bgmGain.gain.value, this.ctx.currentTime);
+          this.bgmGain.gain.linearRampToValueAtTime(0.001, this.ctx.currentTime + 0.1);
+          setTimeout(() => {
+              if(this.bgmGain) this.bgmGain.disconnect();
+              this.bgmGain = null;
+          }, 150);
+      }
+    },
+    scheduler() {
+      if (!this.currentTrack || !this.enabled || !this.ctx) return;
+      while (this.nextNoteTime < this.ctx.currentTime + 0.1) {
+        this.playNote(this.seq[this.currentNote], this.nextNoteTime);
+        this.nextNoteTime += this.seqSpeed;
+        this.currentNote = (this.currentNote + 1) % this.seq.length;
+      }
+      this.bgmTimer = setTimeout(() => this.scheduler(), 25);
+    },
+    playNote(freq, time) {
+      if(!this.bgmGain) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = (this.currentTrack.includes('boss') || this.currentTrack === 'insane') ? 'sawtooth' : 'triangle';
+      osc.frequency.value = freq;
+      
+      gain.gain.setValueAtTime(0, time);
+      gain.gain.linearRampToValueAtTime(1, time + 0.05);
+      gain.gain.linearRampToValueAtTime(0, time + this.seqSpeed * 0.9);
+      
+      osc.connect(gain);
+      gain.connect(this.bgmGain);
+      osc.start(time);
+      osc.stop(time + this.seqSpeed);
+    },
+playCash() {
       if (!this.canPlay('cash', 60)) return;
       const t = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
@@ -819,7 +882,14 @@
       hudBtn.textContent = label;
       hudBtn.className = `btn ${SFX.enabled ? 'btn-success' : ''}`;
     }
-    if (SFX.enabled) SFX.playCash();
+    
+    if (SFX.enabled) {
+      SFX.playCash();
+      if(battleState && battleState.running) checkBGM();
+    } else {
+      SFX.stopBGM();
+    }
+
   }
 
   /**************************************************************
@@ -2387,6 +2457,7 @@
       }
     }
     updateBattleHUD();
+    checkBGM();
   }
 
   function toggleSandboxAutoSpawn() {
@@ -2411,6 +2482,7 @@
       t.slowTimer = 0;
     });
     updateBattleHUD();
+    checkBGM();
   }
 
   function updateTutorialBanner() {
@@ -2450,6 +2522,7 @@
 
   function showVictoryScreen(diffName) {
     battleState.running = false;
+    SFX.stopBGM();
     SFX.playCash();
     let rewardHTML = '';
     const retryBtn = document.getElementById('retry-btn');
@@ -2506,6 +2579,7 @@
 
   function showDefeatScreen() {
     battleState.running = false;
+    SFX.stopBGM();
     SFX.playBossSkill();
     drawResultPixelIcon(false);
 
@@ -2678,6 +2752,26 @@
     return false;
   }
 
+  
+  function checkBGM() {
+    if (!battleState.running) { SFX.stopBGM(); return; }
+    let hasBoss = battleState.enemies.some(e => e.isBoss);
+    let track = '';
+    
+    if (hasBoss) {
+        track = (battleState.diffName === '인세인') ? 'insane_boss' : 'boss';
+    } else {
+        if (battleState.diffName === '이지') track = 'easy';
+        else if (battleState.diffName === '노말') track = 'normal';
+        else if (battleState.diffName === '하드') track = 'hard';
+        else if (battleState.diffName === '인세인') track = 'insane';
+        else if (battleState.diffName === '튜토리얼' || battleState.diffName === '훈련장체험') track = 'tutorial';
+        else track = 'normal';
+    }
+    
+    SFX.playBGM(track);
+  }
+
   function startBattle(diffName) {
     if (diffName === '튜토리얼' && playerState.tutorialCleared) {
       diffName = '훈련장체험';
@@ -2744,10 +2838,12 @@
     updateTutorialBanner();
     renderBattleSidebar();
     updateBattleHUD();
+    checkBGM();
   }
 
   function exitBattle() {
     battleState.running = false;
+    SFX.stopBGM();
     switchPanel('play');
   }
 
@@ -2904,7 +3000,7 @@
       burstRemaining: 0,
       burstTimer: 0,
       photonState: 'CHARGING',
-      chargeProgress: 0,
+      chargeProgress: 0, targetMode: 'first',
       heat: 50,
       overloadTimer: 0,
       activeTarget: null
@@ -2924,7 +3020,22 @@
     recalculateDJBuffs();
     renderBattleSidebar();
     updateBattleHUD();
+    checkBGM();
   });
+
+  
+  const TARGET_MODES = ['first', 'last', 'strongest', 'weakest', 'boss', 'random'];
+  const TARGET_NAMES = { 'first': '첫번째', 'last': '마지막', 'strongest': '가장강한', 'weakest': '가장약한', 'boss': '보스', 'random': '랜덤' };
+  
+  function cycleTargetMode() {
+    const t = battleState.selectedPlacedTower;
+    if (!t) return;
+    SFX.playCash();
+    let idx = TARGET_MODES.indexOf(t.targetMode || 'first');
+    idx = (idx + 1) % TARGET_MODES.length;
+    t.targetMode = TARGET_MODES[idx];
+    document.getElementById('target-btn').textContent = `🎯 타겟: ${TARGET_NAMES[t.targetMode]}`;
+  }
 
   function getDiscountedUpgradeCost(tower) {
     const db = TOWER_DB.find(x => x.id === tower.typeId);
@@ -2962,6 +3073,11 @@
     }
 
     document.getElementById('upg-info').innerHTML = detailHTML;
+
+    if (document.getElementById('target-btn')) {
+      document.getElementById('target-btn').textContent = `🎯 타겟: ${TARGET_NAMES[t.targetMode || 'first']}`;
+    }
+
 
     if (t.level >= 4) {
       upgBtn.textContent = '4레벨 MAX 달성';
@@ -3013,6 +3129,7 @@
 
     showUpgradeBox(t);
     updateBattleHUD();
+    checkBGM();
   }
 
   function sellSelectedTower() {
@@ -3043,6 +3160,7 @@
     recalculateDJBuffs();
     renderBattleSidebar();
     updateBattleHUD();
+    checkBGM();
   }
 
   /**************************************************************
@@ -3618,16 +3736,32 @@
       if (t.stunTimer > 0) { t.stunTimer--; t.activeTarget = null; return; }
       if (t.slowTimer > 0) t.slowTimer--;
 
-      let target = battleState.enemies.find(e =>
-        e.isSoul && Math.hypot(e.x - t.x, e.y - t.y) <= t.range
-      );
-
-      if (!target) {
-        target = battleState.enemies.find(e => {
+      let targetCandidates = battleState.enemies.filter(e => {
           if (e.isHidden && !t.hiddenDetect) return false;
           if (t.soulBound && e.isBoss) return false;
           return Math.hypot(e.x - t.x, e.y - t.y) <= t.range;
-        });
+      });
+
+      // 영혼은 무조건 최우선
+      let soulTarget = targetCandidates.find(e => e.isSoul);
+      let target = null;
+
+      if (soulTarget) {
+          target = soulTarget;
+      } else if (targetCandidates.length > 0) {
+          if (t.targetMode === 'last') {
+              target = targetCandidates.sort((a,b) => a.wpIndex - b.wpIndex || Math.hypot(a.x - wps[a.wpIndex]?.x||0, a.y - wps[a.wpIndex]?.y||0) - Math.hypot(b.x - wps[b.wpIndex]?.x||0, b.y - wps[b.wpIndex]?.y||0))[0];
+          } else if (t.targetMode === 'strongest') {
+              target = targetCandidates.sort((a,b) => b.hp - a.hp)[0];
+          } else if (t.targetMode === 'weakest') {
+              target = targetCandidates.sort((a,b) => a.hp - b.hp)[0];
+          } else if (t.targetMode === 'boss') {
+              target = targetCandidates.find(e => e.isBoss) || targetCandidates[0];
+          } else if (t.targetMode === 'random') {
+              target = targetCandidates[Math.floor(Math.random() * targetCandidates.length)];
+          } else { // default 'first'
+              target = targetCandidates.sort((a,b) => b.wpIndex - a.wpIndex || Math.hypot(b.x - wps[b.wpIndex]?.x||0, b.y - wps[b.wpIndex]?.y||0) - Math.hypot(a.x - wps[a.wpIndex]?.x||0, a.y - wps[a.wpIndex]?.y||0))[0];
+          }
       }
 
       if (t.typeId === 'photon') {
